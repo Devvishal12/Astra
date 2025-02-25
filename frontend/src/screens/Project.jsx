@@ -4,21 +4,10 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import axios from '../config/axios';
 import { initializeSocket, receiveMessage, sendMessage } from '../config/socket';
 import Markdown from 'markdown-to-jsx';
-import hljs from 'highlight.js';
-import { getWebContainer } from '../config/webcontainer';
 import { useTheme } from '../context/ThemeContext';
-import { loadPyodide } from 'pyodide';
 
 function SyntaxHighlightedCode({ className, children, ...props }) {
   const ref = useRef(null);
-
-  useEffect(() => {
-    if (ref.current && className?.includes('lang-') && hljs) {
-      hljs.highlightElement(ref.current);
-      ref.current.removeAttribute('data-highlighted');
-    }
-  }, [className, children]);
-
   return <code {...props} ref={ref} className={className}>{children}</code>;
 }
 
@@ -38,13 +27,8 @@ const Project = () => {
   const [fileTree, setFileTree] = useState({});
   const [currentFile, setCurrentFile] = useState(null);
   const [openFiles, setOpenFiles] = useState([]);
-  const [webContainer, setWebContainer] = useState(null);
-  const [iframeUrl, setIframeUrl] = useState(null);
   const [users, setUsers] = useState([]);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [runProcess, setRunProcess] = useState(null);
-  const [isSetupComplete, setIsSetupComplete] = useState({ python: false, gcc: false });
-  const [pyodideInstance, setPyodideInstance] = useState(null);
 
   const handleUserClick = (id) => {
     setSelectedUserIds((prev) => {
@@ -76,7 +60,7 @@ const Project = () => {
     if (message.toLowerCase().startsWith('ai:')) {
       sendToAI(message.slice(3).trim());
     } else {
-      const messageData = { message, sender: user };
+      const messageData = { message, sender: user, timestamp: Date.now() };
       sendMessage('project-message', messageData);
       setMessages((prev) => [...prev, messageData]);
     }
@@ -89,12 +73,19 @@ const Project = () => {
       const aiMessage = {
         message: JSON.stringify(aiResponse),
         sender: { _id: 'ai', email: 'AI Assistant' },
+        timestamp: Date.now(),
       };
       sendMessage('project-message', aiMessage);
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.error('Error sending to AI:', error);
     }
+  };
+
+  const deleteMessage = (timestamp) => {
+    const deleteData = { timestamp, projectId: project._id, sender: user };
+    sendMessage('delete-message', deleteData);
+    setMessages((prev) => prev.filter((msg) => msg.timestamp !== timestamp));
   };
 
   const saveFileTree = (ft) => {
@@ -146,198 +137,10 @@ const Project = () => {
     navigate('/');
   };
 
-  const detectLanguage = (fileName) => {
-    if (!fileName) return 'plaintext';
-    const extension = fileName.split('.').pop().toLowerCase();
-    switch (extension) {
-      case 'js':
-      case 'jsx':
-        return 'javascript';
-      case 'ts':
-      case 'tsx':
-        return 'typescript';
-      case 'py':
-        return 'python';
-      case 'c':
-        return 'c';
-      case 'cpp':
-      case 'cxx':
-      case 'cc':
-        return 'cpp';
-      case 'html':
-        return 'html';
-      case 'css':
-        return 'css';
-      default:
-        return 'plaintext';
-    }
-  };
-
-  const setupEnvironment = async (language) => {
-    if (!webContainer) return;
-    try {
-      if (language === 'c' || language === 'cpp') {
-        if (!isSetupComplete.gcc) {
-          setMessages((prev) => [
-            ...prev,
-            { message: 'Setting up GCC environment...', sender: { _id: 'system', email: 'System' } },
-          ]);
-          await webContainer.spawn('npm', ['install', '-g', 'emscripten']);
-          setIsSetupComplete((prev) => ({ ...prev, gcc: true }));
-          setMessages((prev) => [
-            ...prev,
-            { message: 'GCC environment ready.', sender: { _id: 'system', email: 'System' } },
-          ]);
-        }
-      }
-    } catch (error) {
-      console.error(`Error setting up ${language} environment:`, error);
-      setMessages((prev) => [
-        ...prev,
-        { message: `Failed to setup ${language} environment: ${error.message}`, sender: { _id: 'system', email: 'System' } },
-      ]);
-    }
-  };
-
-  const runCodeForLanguage = async (language) => {
-    if (!webContainer || !currentFile) {
-      console.error('WebContainer or current file not available');
-      setMessages((prev) => [
-        ...prev,
-        { message: 'Error: WebContainer or file not available.', sender: { _id: 'system', email: 'System' } },
-      ]);
-      return;
-    }
-
-    try {
-      if (runProcess) await runProcess.kill();
-      await setupEnvironment(language);
-
-      let command, args, outputFile;
-      switch (language) {
-        case 'javascript':
-        case 'typescript':
-          command = 'node';
-          args = [currentFile];
-          break;
-        case 'python':
-          if (!pyodideInstance) {
-            setMessages((prev) => [
-              ...prev,
-              { message: 'Loading Pyodide for Python...', sender: { _id: 'system', email: 'System' } },
-            ]);
-            const pyodide = await loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.27.2/full/' });
-            let outputBuffer = '';
-            pyodide.setStdout({
-              write: (str) => {
-                outputBuffer += str;
-                return str.length;
-              },
-            });
-            pyodide.setStderr({
-              write: (str) => {
-                outputBuffer += str;
-                return str.length;
-              },
-            });
-            setPyodideInstance(pyodide);
-            await webContainer.mount(fileTree);
-            await pyodide.runPythonAsync(fileTree[currentFile].file.contents);
-            setMessages((prev) => [
-              ...prev,
-              { message: outputBuffer || 'Python executed (no output)', sender: { _id: 'system', email: 'Output' } },
-            ]);
-            setIsSetupComplete((prev) => ({ ...prev, python: true }));
-          } else {
-            let outputBuffer = '';
-            pyodideInstance.setStdout({
-              write: (str) => {
-                outputBuffer += str;
-                return str.length;
-              },
-            });
-            pyodideInstance.setStderr({
-              write: (str) => {
-                outputBuffer += str;
-                return str.length;
-              },
-            });
-            await webContainer.mount(fileTree);
-            await pyodideInstance.runPythonAsync(fileTree[currentFile].file.contents);
-            setMessages((prev) => [
-              ...prev,
-              { message: outputBuffer || 'Python executed (no output)', sender: { _id: 'system', email: 'Output' } },
-            ]);
-          }
-          return;
-        case 'c':
-        case 'cpp':
-          if (!isSetupComplete.gcc) {
-            setMessages((prev) => [
-              ...prev,
-              { message: 'GCC setup not complete yet.', sender: { _id: 'system', email: 'System' } },
-            ]);
-            return;
-          }
-          outputFile = currentFile.replace(/\.(c|cpp|cxx|cc)$/, '.js');
-          await webContainer.spawn('emcc', [currentFile, '-o', outputFile, '-s', 'ENVIRONMENT=node']);
-          command = 'node';
-          args = [outputFile];
-          break;
-        case 'html':
-          command = 'npx';
-          args = ['serve', '.'];
-          setIframeUrl('http://localhost:3000');
-          break;
-        default:
-          console.warn(`Unsupported language: ${language}`);
-          setMessages((prev) => [
-            ...prev,
-            { message: `Error: Execution of ${language} files is not supported.`, sender: { _id: 'system', email: 'System' } },
-          ]);
-          return;
-      }
-
-      const process = await webContainer.spawn(command, args);
-      setRunProcess(process);
-
-      process.output.pipeTo(
-        new WritableStream({
-          write(chunk) {
-            console.log(`Output: ${chunk}`);
-            setMessages((prev) => [...prev, { message: chunk, sender: { _id: 'system', email: 'Output' } }]);
-          },
-        })
-      );
-
-      const exitCode = await process.exit;
-      if (exitCode !== 0) {
-        console.error(`Process exited with code ${exitCode}`);
-        setMessages((prev) => [
-          ...prev,
-          { message: `Process exited with error code ${exitCode}`, sender: { _id: 'system', email: 'System' } },
-        ]);
-      }
-    } catch (error) {
-      console.error('Error running code:', error);
-      setMessages((prev) => [
-        ...prev,
-        { message: `Error running code: ${error.message}`, sender: { _id: 'system', email: 'System' } },
-      ]);
-    }
-  };
-
   useEffect(() => {
-    const socket = initializeSocket(project?._id);
+    if (!project?._id) return;
 
-    if (!webContainer) {
-      getWebContainer()
-        .then((container) => {
-          setWebContainer(container);
-          console.log('WebContainer initialized');
-        })
-        .catch((err) => console.error('Failed to initialize WebContainer:', err));
-    }
+    const socket = initializeSocket(project._id);
 
     const messageHandler = (data) => {
       console.log('Received message:', data);
@@ -359,14 +162,11 @@ const Project = () => {
               }
             }
             if (Object.keys(validatedFileTree).length > 0) {
-              webContainer?.mount(validatedFileTree).then(() => {
-                console.log('FileTree mounted successfully');
-                setFileTree(validatedFileTree || {});
-              }).catch((err) => console.error('Failed to mount fileTree:', err));
+              setFileTree(validatedFileTree || {});
             }
           }
           setMessages((prev) => {
-            const exists = prev.some((msg) => msg.message === data.message && msg.sender._id === data.sender._id);
+            const exists = prev.some((msg) => msg.timestamp === data.timestamp);
             return exists ? prev : [...prev, data];
           });
         } catch (error) {
@@ -374,13 +174,19 @@ const Project = () => {
         }
       } else {
         setMessages((prev) => {
-          const exists = prev.some((msg) => msg.message === data.message && msg.sender._id === data.sender._id);
+          const exists = prev.some((msg) => msg.timestamp === data.timestamp);
           return exists ? prev : [...prev, data];
         });
       }
     };
 
+    const deleteMessageHandler = (data) => {
+      console.log('Received delete message:', data);
+      setMessages((prev) => prev.filter((msg) => msg.timestamp !== data.timestamp));
+    };
+
     receiveMessage('project-message', messageHandler);
+    receiveMessage('delete-message', deleteMessageHandler);
 
     if (project && project._id) {
       axios
@@ -404,8 +210,11 @@ const Project = () => {
     };
     scrollToBottom();
 
-    return () => socket.off('project-message', messageHandler);
-  }, [project?._id, webContainer]);
+    return () => {
+      socket.off('project-message', messageHandler);
+      socket.off('delete-message', deleteMessageHandler);
+    };
+  }, [project?._id]);
 
   if (!project) {
     return (
@@ -449,7 +258,6 @@ const Project = () => {
           theme === 'dark' ? 'bg-gradient-to-br from-gray-900 to-indigo-900' : 'bg-gradient-to-br from-indigo-50 to-purple-100'
         }`}
       >
-        {/* Sidebar */}
         <section
           className={`flex flex-col h-screen w-80 transition-all duration-300 ${
             theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100'
@@ -584,7 +392,6 @@ const Project = () => {
             </div>
           </header>
 
-          {/* Chat Area */}
           <div className="flex flex-col flex-grow p-4 overflow-hidden">
             <div
               ref={messageBoxRef}
@@ -593,10 +400,10 @@ const Project = () => {
               }`}
             >
               {messages.length > 0 ? (
-                messages.map((msg, index) => (
+                messages.map((msg) => (
                   <div
-                    key={index}
-                    className={`max-w-md p-4 rounded-xl shadow-md transition-all duration-200 ${
+                    key={msg.timestamp}
+                    className={`max-w-md p-4 rounded-xl shadow-md transition-all duration-200 flex justify-between items-center ${
                       msg.sender._id === user._id
                         ? 'ml-auto bg-indigo-500 text-white'
                         : theme === 'dark'
@@ -604,8 +411,31 @@ const Project = () => {
                         : 'bg-gray-200 text-gray-900'
                     }`}
                   >
-                    <small className="text-xs opacity-75 block mb-1">{msg.sender.email}</small>
-                    {msg.sender._id === 'ai' ? WriteAiMessage(msg.message) : <p className="break-words">{msg.message}</p>}
+                    <div>
+                      <small className="text-xs opacity-75 block mb-1">{msg.sender.email}</small>
+                      {msg.sender._id === 'ai' ? WriteAiMessage(msg.message) : <p className="break-words">{msg.message}</p>}
+                    </div>
+                    {msg.sender._id === user._id && (
+                      <button
+                        onClick={() => deleteMessage(msg.timestamp)}
+                        className="ml-2 p-1 rounded-full hover:bg-red-500/20 transition-all duration-200"
+                        title="Delete Message"
+                      >
+                        <svg
+                          className={`w-5 h-5 ${theme === 'dark' ? 'text-red-400' : 'text-red-500'}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 ))
               ) : (
@@ -625,7 +455,7 @@ const Project = () => {
                   theme === 'dark'
                     ? 'bg-gray-800 border-gray-700 text-gray-100 placeholder-gray-500'
                     : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400'
-                } focus:border-indigo-500 focus:ring-4 focus:ring-indigo-300/50 transition-all duration-300`}
+                } focus:border-indigo-500 focus:ring-4 focus:ring-indigo-300/50 transition-all duration-200`}
                 placeholder="Type a message..."
               />
               <button
@@ -648,7 +478,6 @@ const Project = () => {
             </div>
           </div>
 
-          {/* Collaborators Sidebar */}
           <div
             className={`absolute inset-0 transition-transform duration-300 ${
               theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100'
@@ -694,7 +523,6 @@ const Project = () => {
           </div>
         </section>
 
-        {/* Editor Section */}
         <section className={`flex-grow flex ${theme === 'dark' ? 'bg-gray-900' : 'bg-gray-50'}`}>
           <div className={`w-72 ${theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100'} p-4`}>
             <h2 className="text-xl font-semibold mb-3">Files</h2>
@@ -747,34 +575,6 @@ const Project = () => {
                   {file}
                 </button>
               ))}
-              <button
-                onClick={async () => {
-                  if (!fileTree || Object.keys(fileTree).length === 0) {
-                    setMessages((prev) => [
-                      ...prev,
-                      { message: 'No files available to run.', sender: { _id: 'system', email: 'System' } },
-                    ]);
-                    return;
-                  }
-                  if (!currentFile) {
-                    setMessages((prev) => [
-                      ...prev,
-                      { message: 'Please select a file to run.', sender: { _id: 'system', email: 'System' } },
-                    ]);
-                    return;
-                  }
-                  await webContainer?.mount(fileTree);
-                  const language = detectLanguage(currentFile);
-                  runCodeForLanguage(language);
-                }}
-                className={`ml-auto px-6 py-2 rounded-xl text-lg font-semibold text-white shadow-md transition-all duration-200 hover:-translate-y-1 focus:outline-none focus:ring-4 ${
-                  theme === 'dark'
-                    ? 'bg-green-600 hover:bg-green-700 focus:ring-green-400'
-                    : 'bg-green-500 hover:bg-green-600 focus:ring-green-300'
-                }`}
-              >
-                Run
-              </button>
             </div>
             {fileTree[currentFile] && (
               <pre
@@ -789,33 +589,16 @@ const Project = () => {
                     setFileTree(ft);
                     saveFileTree(ft);
                   }}
-                  dangerouslySetInnerHTML={{
-                    __html: hljs.highlight(detectLanguage(currentFile), fileTree[currentFile].file.contents).value,
-                  }}
-                  className="hljs w-full outline-none text-lg"
+                  className="w-full outline-none text-lg"
                   style={{ whiteSpace: 'pre-wrap', paddingBottom: '25rem' }}
-                />
+                >
+                  {fileTree[currentFile].file.contents}
+                </code>
               </pre>
             )}
           </div>
-
-          {iframeUrl && webContainer && (
-            <div className="w-96 flex flex-col border-l border-gray-700/50">
-              <input
-                value={iframeUrl}
-                onChange={(e) => setIframeUrl(e.target.value)}
-                className={`p-3 border-b text-lg ${
-                  theme === 'dark'
-                    ? 'bg-gray-800 border-gray-700 text-gray-100 placeholder-gray-500'
-                    : 'bg-gray-100 border-gray-200 text-gray-900 placeholder-gray-400'
-                }`}
-              />
-              <iframe src={iframeUrl} className="flex-grow" />
-            </div>
-          )}
         </section>
 
-        {/* Add Collaborators Modal */}
         {isModalOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center animate-fade-in">
             <div

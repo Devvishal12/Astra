@@ -131,3 +131,21 @@ export const updateFileTree = async (req, res) => {
     }
 
 }
+
+export const deleteProject = async (req, res) => {
+    try {
+        const { projectId } = req.params; // Get projectId from URL params
+        const loggedInUser = await userModel.findOne({ email: req.user.email });
+        const userId = loggedInUser._id;
+
+        const result = await projectService.deleteProject({
+            projectId,
+            userId,
+        });
+
+        return res.status(200).json(result);
+    } catch (err) {
+        console.log(err);
+        res.status(400).json({ error: err.message });
+    }
+};

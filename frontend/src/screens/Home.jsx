@@ -18,7 +18,7 @@ const Home = () => {
     axios
       .post('/projects/create', { name: projectName })
       .then((res) => {
-        setProjects([...projects, res.data.project]);
+        setProjects([...projects, res.data]); // Adjusted to res.data since newProject is returned directly
         setIsModalOpen(false);
         setProjectName('');
       })
@@ -29,6 +29,17 @@ const Home = () => {
     localStorage.removeItem('token');
     setUser(null);
     navigate('/');
+  };
+
+  const deleteProject = (projectId) => {
+    if (window.confirm('Are you sure you want to delete this project?')) {
+      axios
+        .delete(`/projects/delete/${projectId}`)
+        .then(() => {
+          setProjects(projects.filter((project) => project._id !== projectId));
+        })
+        .catch((err) => console.log('Error deleting project:', err));
+    }
   };
 
   useEffect(() => {
@@ -190,28 +201,51 @@ const Home = () => {
           {projects.map((project) => (
             <div
               key={project._id}
-              onClick={() => navigate('/project', { state: { project } })}
-              className={`group p-6 rounded-3xl border-2 shadow-md transform transition-all duration-300 hover:scale-105 hover:shadow-xl cursor-pointer ${
+              className={`group p-6 rounded-3xl border-2 shadow-md transform transition-all duration-300 hover:scale-105 hover:shadow-xl ${
                 theme === 'dark'
                   ? 'bg-gray-800 border-gray-700 text-gray-100 hover:bg-gray-700'
                   : 'bg-white border-gray-200 text-gray-900 hover:bg-gray-50'
               }`}
             >
-              <div className="flex items-center mb-4">
-                <svg
-                  className={`w-8 h-8 mr-3 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-500'}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              <div className="flex justify-between items-center mb-4">
+                <div
+                  onClick={() => navigate('/project', { state: { project } })}
+                  className="flex items-center cursor-pointer"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-                <h2 className="text-xl font-semibold truncate">{project.name}</h2>
+                  <svg
+                    className={`w-8 h-8 mr-3 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-500'}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  <h2 className="text-xl font-semibold truncate">{project.name}</h2>
+                </div>
+                <button
+                  onClick={() => deleteProject(project._id)}
+                  className="p-2 rounded-full hover:bg-red-500/20 transition-all duration-200"
+                  title="Delete Project"
+                >
+                  <svg
+                    className={`w-6 h-6 ${theme === 'dark' ? 'text-red-400' : 'text-red-500'}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
               </div>
               <div className="flex items-center text-sm">
                 <svg className="w-5 h-5 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
